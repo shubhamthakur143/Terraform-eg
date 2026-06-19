@@ -1,0 +1,161 @@
+provider "aws" {
+
+        region = "us-east-1"
+}
+
+resource "aws_launch_template" "lt_home" {
+
+        name = "lt-home"
+        description = "lt for home page"
+        image_id = var.image
+        instance_type = var.type
+        key_name = var.key
+        vpc_security_group_ids = [var.sg]
+
+  user_data = base64encode(<<-EOF
+        #!/bin/bash
+        apt update -y
+        apt install -y apache2
+        echo "<h1>Home Page</h1>" > /var/www/html/index.html
+        systemctl start apache2
+        systemctl enable apache2
+        EOF
+)
+}
+
+resource "aws_launch_template" "lt_mobile" {
+
+        name = "lt-mobile"
+        description = "lt for mobile page"
+        image_id = var.image
+        instance_type = var.type
+        key_name = var.key
+        vpc_security_group_ids = [var.sg]
+
+  user_data = base64encode(<<-EOF
+        #!/bin/bash
+        apt update -y
+        apt install -y apache2
+  mkdir -p /var/www/html/mobile
+        echo "<h1>Mobile Page</h1>" > /var/www/html/mobile/index.html
+        systemctl start apache2
+        systemctl enable apache2
+        EOF
+)
+}
+
+resource "aws_lb_target_group" "tg_home" {
+  name     = "tg-home"
+  target_type = "instance"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = var.vpc
+
+  health_check {
+  protocol = "HTTP"
+  path = "/"
+  }
+}
+
+resource "aws_lb_target_group" "tg_mobile" {
+  name     = "tg-mobile"
+  target_type = "instance"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = var.vpc
+
+  health_check {
+  protocol = "HTTP"
+  path = "/mobile"
+  }
+}
+
+resource "aws_lb" "lb_cbz" {
+  name               = "lb-cbz"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [var.sg]
+  subnets            = ["subnet-0d2dcf3e2aec9aca7","subnet-017c18902242875b5"]
+  ip_address_type    = "ipv4"
+
+}
+  resource "aws_lb_listener" "cbz_listner" {
+  load_balancer_arn = aws_lb.lb_cbz.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.tg_home.arn
+  }
+  }
+
+
+resource "aws_lb_listener_rule" "cbz_listner_rule" {
+  listener_arn = aws_lb_listener.cbz_listner.arn
+  priority     = 100
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.tg_mobile.arn
+  }
+  condition {
+    path_pattern {
+      values = ["/mobile","/mobile/*"]
+    }
+  }
+}
+
+resource "aws_autoscaling_group" "asg_home" {
+  name                 = "asg-home"
+  min_size             = 1
+  max_size             = 3
+  desired_capacity     = 1
+  vpc_zone_identifier = ["subnet-0d2dcf3e2aec9aca7", "subnet-017c18902242875b5"]
+  target_group_arns = [aws_lb_target_group.tg_home.arn]
+  launch_template {
+    id      = aws_launch_template.lt_home.id
+    version = "$Latest"
+  }
+
+}
+resource "aws_autoscaling_policy" "asg_home_policy" {
+  # ... other configuration ...
+  name                   = "policy-home"
+  autoscaling_group_name = aws_autoscaling_group.asg_home.name
+  policy_type            = "TargetTrackingScaling"
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+
+    target_value = 70.0
+  }
+}
+
+resource "aws_autoscaling_group" "asg_mobile" {
+  name                 = "asg-mobile"
+  min_size             = 1
+  max_size             = 3
+  desired_capacity     = 1
+  vpc_zone_identifier = ["subnet-0d2dcf3e2aec9aca7", "subnet-017c18902242875b5"]
+  target_group_arns = [aws_lb_target_group.tg_mobile.arn]
+  launch_template {
+    id      = aws_launch_template.lt_mobile.id
+    version = "$Latest"
+  }
+
+ }
+ resource "aws_autoscaling_policy" "asg_mobile_policy" {
+  # ... other configuration ...
+  name                   = "policy-mobile"
+  autoscaling_group_name = aws_autoscaling_group.asg_mobile.name
+  policy_type            = "TargetTrackingScaling"
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+
+    target_value = 70.0
+  }
+}
